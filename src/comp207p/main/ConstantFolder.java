@@ -5,6 +5,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.lang.reflect.Array;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Iterator;
 
 import org.apache.bcel.classfile.*;
@@ -48,14 +49,14 @@ public class ConstantFolder
                     (ArithmeticInstruction) match[2].getInstruction(), cpgen);
             try {
                 il.delete(match[0], match[1]);
-                match[2].setInstruction(instructionFactory.createConstant(constant));
             } catch(TargetLostException ex){
                 for (InstructionHandle target : ex.getTargets()) {
                     for (InstructionTargeter t : target.getTargeters()) {
-                        t.updateTarget(target, match[0]);
+                        t.updateTarget(target, match[2]);
                     }
                 }
             }
+            match[2].setInstruction(instructionFactory.createConstant(constant));
         }
         e = instructionFinder.search("(ConstantPushInstruction|LDC)(INEG|LNEG|FNEG|DNEG)");
         while(e.hasNext()){
@@ -71,14 +72,14 @@ public class ConstantFolder
                     (ArithmeticInstruction) match[1].getInstruction(), cpgen);
             try {
                 il.delete(match[0]);
-                match[1].setInstruction(instructionFactory.createConstant(constant));
             } catch(TargetLostException ex){
                 for (InstructionHandle target : ex.getTargets()) {
                     for (InstructionTargeter t : target.getTargeters()) {
-                        t.updateTarget(target, match[0]);
+                        t.updateTarget(target, match[1]);
                     }
                 }
             }
+            match[1].setInstruction(instructionFactory.createConstant(constant));
         }
     }
 
@@ -159,6 +160,40 @@ public class ConstantFolder
         }
     }
 
+    private void optimizeUnusedVariables(InstructionFinder instructionFinder, InstructionList il){
+        HashSet<Integer> indices = new HashSet<Integer>();
+        Iterator e = instructionFinder.search("StoreInstruction");
+        while(e.hasNext()){
+            InstructionHandle[] match = (InstructionHandle[]) e.next();
+            indices.add(((StoreInstruction)match[0].getInstruction()).getIndex());
+        }
+        e = instructionFinder.search("LoadInstruction");
+        while(e.hasNext()){
+            InstructionHandle[] match = (InstructionHandle[]) e.next();
+            indices.remove(((LoadInstruction)match[0].getInstruction()).getIndex());
+        }
+        for(int index : indices) {
+            e = instructionFinder.search("StoreInstruction");
+            while(e.hasNext()){
+                InstructionHandle[] match = (InstructionHandle[]) e.next();
+                if( ((StoreInstruction)match[0].getInstruction()).getIndex() == index){
+                    InstructionHandle nextNode = match[0].getNext();
+                    try {
+                        if(match[0].getPrev() == null) throw new RuntimeException("This should never happen");
+                        il.delete(match[0].getPrev(), match[0]);
+                    } catch(TargetLostException ex){
+                        for (InstructionHandle target : ex.getTargets()) {
+                            for (InstructionTargeter t : target.getTargeters()) {
+                                if(nextNode == null) throw new RuntimeException("Bad");
+                                t.updateTarget(target, nextNode);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private abstract class Optimization {
         abstract void run(InstructionFinder instructionFinder, InstructionList il, MethodGen methodGen);
     }
@@ -194,10 +229,17 @@ public class ConstantFolder
                 optimizeConstantLoads(instructionFinder, il, constantVarInfos);
             }
         };
+        Optimization removeUnusedVariables = new Optimization() {
+            @Override
+            void run(InstructionFinder instructionFinder, InstructionList il, MethodGen methodGen) {
+                optimizeUnusedVariables(instructionFinder, il);
+            }
+        };
         Optimization simpleConstantFolding = new Optimization() {
             @Override
             void run(InstructionFinder instructionFinder, InstructionList il, MethodGen methodGen) {
                 runUntilExhaustion(constantFolding, il, methodGen);
+                runUntilExhaustion(removeUnusedVariables, il, methodGen);
                 runUntilExhaustion(simpleFolding, il, methodGen);
             }
         };
@@ -206,6 +248,7 @@ public class ConstantFolder
 		    System.out.println(m.toString());
             MethodGen methodGen = new MethodGen(m, gen.getClassName(), cpgen);
             InstructionList il = methodGen.getInstructionList();
+            if(il == null) continue;
             String unopt = il.toString();
 
             runUntilExhaustion(simpleFolding, il, methodGen);
