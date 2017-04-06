@@ -3,11 +3,11 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.lang.reflect.Array;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Iterator;
 
+import org.apache.bcel.Constants;
 import org.apache.bcel.classfile.*;
 import org.apache.bcel.generic.*;
 import org.apache.bcel.util.InstructionFinder;
@@ -129,7 +129,7 @@ public class ConstantFolder
             op.setInstruction(instructionFactory.createConstant(constant));
         }
         instructionFinder.reread();
-        e = instructionFinder.search("((ConstantPushInstruction|LDC|LDC2_W)(ConstantPushInstruction|LDC|LDC2_W)(IfInstruction))");
+        e = instructionFinder.search("(ConstantPushInstruction|LDC|LDC2_W)(ConstantPushInstruction|LDC|LDC2_W)(IfInstruction)");
         while(e.hasNext()){
             InstructionHandle[] match = (InstructionHandle[]) e.next();
             InstructionHandle value1, value2, op;
@@ -170,6 +170,70 @@ public class ConstantFolder
                     }
                 }
             }
+        }
+        instructionFinder.reread();
+        e = instructionFinder.search("(ConstantPushInstruction|LDC|LDC2_W)(IFEQ|IFGE|IFGT|IFLE|IFLT|IFNE)");
+        while(e.hasNext()){
+            InstructionHandle[] match = (InstructionHandle[]) e.next();
+            InstructionHandle value, op;
+            value = match[0];
+            op = match[1];
+            boolean result = Utils.computeIfResult(null,
+                    Utils.getPushValue(value.getInstruction(), cpgen),
+                    (IfInstruction) op.getInstruction(), cpgen);
+            try {
+                il.delete(value);
+            } catch(TargetLostException ex){
+                for (InstructionHandle target : ex.getTargets()) {
+                    for (InstructionTargeter t : target.getTargeters()) {
+                        t.updateTarget(target, op);
+                    }
+                }
+            }
+            if(result){
+                op.setInstruction(new GOTO(((IfInstruction) op.getInstruction()).getTarget()));
+            }
+            else{
+                InstructionHandle nextNode = op.getNext();
+                try {
+                    il.delete(op);
+                } catch(TargetLostException ex){
+                    for (InstructionHandle target : ex.getTargets()) {
+                        for (InstructionTargeter t : target.getTargeters()) {
+                            t.updateTarget(target, nextNode);
+                        }
+                    }
+                }
+            }
+        }
+        instructionFinder.reread();
+        e = instructionFinder.search("(ConstantPushInstruction|LDC|LDC2_W)(ConstantPushInstruction|LDC|LDC2_W)"+Utils.bigCmp);
+        while(e.hasNext()){
+            InstructionHandle[] match = (InstructionHandle[]) e.next();
+            InstructionHandle value1, value2, op;
+            Type instType1, instType2;
+            value1 = match[0];
+            value2 = match[1];
+            op = match[2];
+            instType1 = Utils.getPushType(value1.getInstruction(), cpgen);
+            instType2 = Utils.getPushType(value2.getInstruction(), cpgen);
+            if(! (Utils.isArithmeticType(instType1) && Utils.isArithmeticType(instType2))){
+                System.err.println("THAT'S REALLY WEIRD.");
+                continue;
+            }
+            int result = Utils.computeCmpResult(Utils.getPushValue(value1.getInstruction(), cpgen),
+                    Utils.getPushValue(value2.getInstruction(), cpgen),
+                    op.getInstruction());
+            try {
+                il.delete(value1, value2);
+            } catch(TargetLostException ex){
+                for (InstructionHandle target : ex.getTargets()) {
+                    for (InstructionTargeter t : target.getTargeters()) {
+                        t.updateTarget(target, op);
+                    }
+                }
+            }
+            op.setInstruction(instructionFactory.createConstant(result));
         }
         instructionFinder.reread();
         e = instructionFinder.search("(ConstantPushInstruction|LDC|LDC2_W)(INEG|LNEG|FNEG|DNEG)");
@@ -224,7 +288,7 @@ public class ConstantFolder
 
     private ArrayList<ConstantVarInfo> lookForConstantVariables(InstructionFinder instructionFinder, InstructionList il, MethodGen m) {
         instructionFinder.reread();
-        Iterator e = instructionFinder.search("(ConstantPushInstruction|LDC|LDC_W|LDC2_W)(StoreInstruction)");
+        Iterator e = instructionFinder.search("(ConstantPushInstruction|LDC|LDC_W|LDC2_W)"+Utils.bigStore);
         ArrayList<ConstantVarInfo> constantVarInfos = new ArrayList<>();
         while (e.hasNext()) {
             InstructionHandle[] match = (InstructionHandle[]) e.next();
@@ -307,9 +371,7 @@ public class ConstantFolder
             constantVarInfos.addAll(toAdd);
         } while(!toAdd.isEmpty());*/
 
-        if(il.getStart().getInstruction() instanceof LDC2_W)
-            System.out.println("Ej");
-        e = instructionFinder.search("StoreInstruction|IINC");
+        e = instructionFinder.search(Utils.bigStore+"|IINC");
         while (e.hasNext()) {
             InstructionHandle[] match = (InstructionHandle[]) e.next();
             int index = -1;
@@ -339,7 +401,7 @@ public class ConstantFolder
     }
 
     private void optimizeConstantLoads(InstructionFinder instructionFinder, InstructionList il, ArrayList<ConstantVarInfo> constantVarInfos){
-        Iterator e = instructionFinder.search("LoadInstruction");
+        Iterator e = instructionFinder.search(Utils.bigLoad);
         while(e.hasNext()){
             InstructionHandle[] match = (InstructionHandle[]) e.next();
             InstructionHandle instructionHandle = match[0];
@@ -383,18 +445,18 @@ public class ConstantFolder
 
     private void optimizeUnusedVariables(InstructionFinder instructionFinder, InstructionList il){
         HashSet<Integer> indices = new HashSet<Integer>();
-        Iterator e = instructionFinder.search("StoreInstruction");
+        Iterator e = instructionFinder.search(Utils.bigStore);
         while(e.hasNext()){
             InstructionHandle[] match = (InstructionHandle[]) e.next();
             indices.add(((StoreInstruction)match[0].getInstruction()).getIndex());
         }
-        e = instructionFinder.search("LoadInstruction");
+        e = instructionFinder.search(Utils.bigLoad);
         while(e.hasNext()){
             InstructionHandle[] match = (InstructionHandle[]) e.next();
             indices.remove(((LoadInstruction)match[0].getInstruction()).getIndex());
         }
         for(int index : indices) {
-            e = instructionFinder.search("StoreInstruction");
+            e = instructionFinder.search(Utils.bigStore);
             while(e.hasNext()){
                 InstructionHandle[] match = (InstructionHandle[]) e.next();
                 if( ((StoreInstruction)match[0].getInstruction()).getIndex() == index){

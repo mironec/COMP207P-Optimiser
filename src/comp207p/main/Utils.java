@@ -20,6 +20,11 @@ public class Utils {
     private final static Class[] shlInstructions = {ISHL.class, LSHL.class};
     private final static Class[] shrInstructions = {ISHR.class, LSHR.class};
     private final static Class[] ushrInstructions = {IUSHR.class, LUSHR.class};
+    //public final static String bigStore = "(StoreInstruction|lstore_0|lstore_1|lstore_2|lstore_3|fstore_0|fstore_1|fstore_2|fstore_3|astore_0|astore_1|astore_2|astore_3|dstore_0|dstore_1|dstore_2|dstore_3)";
+    //public final static String bigLoad = "(LoadInstruction|lload_0|lload_1|lload_2|lload_3|fload_0|fload_1|fload_2|fload_3|aload_0|aload_1|aload_2|aload_3|dload_0|dload_1|dload_2|dload_3)";
+    public final static String bigStore = "(StoreInstruction)";
+    public final static String bigLoad = "(LoadInstruction)";
+    public final static String bigCmp = "(LCMP|DCMPL|DCMPG|FCMPG|FCMPL)";
 
 
     private static boolean isType(Type t, Type[] set) {
@@ -102,6 +107,15 @@ public class Utils {
         if(instruction instanceof IF_ICMPLE) return ((Number)value1).intValue() <= ((Number)value2).intValue();
         if(instruction instanceof IF_ICMPLT) return ((Number)value1).intValue() < ((Number)value2).intValue();
         if(instruction instanceof IF_ICMPNE) return ((Number)value1).intValue() != ((Number)value2).intValue();
+        throw new RuntimeException("Non-exhaustive if cases");
+    }
+
+    public static int computeCmpResult(Number value1, Number value2, Instruction instruction){
+        if(instruction instanceof LCMP) return value1.longValue() == value2.longValue() ? 0 : (value1.longValue() > value2.longValue() ? 1 : -1);
+        if(instruction instanceof DCMPG) return value1.doubleValue() > value2.doubleValue() ? 1 : 0;
+        if(instruction instanceof DCMPL) return value1.doubleValue() < value2.doubleValue() ? 1 : 0;
+        if(instruction instanceof FCMPG) return value1.floatValue() > value2.floatValue() ? 1 : 0;
+        if(instruction instanceof FCMPL) return value1.floatValue() < value2.floatValue() ? 1 : 0;
         throw new RuntimeException("Non-exhaustive if cases");
     }
 
