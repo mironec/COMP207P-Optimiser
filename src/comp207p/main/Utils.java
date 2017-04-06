@@ -85,6 +85,26 @@ public class Utils {
         else return n;
     }
 
+    public static boolean computeIfResult(Object value1, Object value2, IfInstruction instruction, ConstantPoolGen cpgen){
+        if(instruction instanceof IFEQ) return ((Number)value2).intValue() == 0;
+        if(instruction instanceof IFGE) return ((Number)value2).intValue() >= 0;
+        if(instruction instanceof IFGT) return ((Number)value2).intValue() > 0;
+        if(instruction instanceof IFLE) return ((Number)value2).intValue() <= 0;
+        if(instruction instanceof IFLT) return ((Number)value2).intValue() < 0;
+        if(instruction instanceof IFNE) return ((Number)value2).intValue() != 0;
+        //if(instruction instanceof IFNONNULL) return value2 != null;
+        //if(instruction instanceof IFNULL) return value2 == null;
+        //if(instruction instanceof IF_ACMPEQ) return value1 == value2;
+        //if(instruction instanceof IF_ACMPNEQ) return value1 != value2;
+        if(instruction instanceof IF_ICMPEQ) return ((Number)value1).intValue() == ((Number)value2).intValue();
+        if(instruction instanceof IF_ICMPGE) return ((Number)value1).intValue() >= ((Number)value2).intValue();
+        if(instruction instanceof IF_ICMPGT) return ((Number)value1).intValue() > ((Number)value2).intValue();
+        if(instruction instanceof IF_ICMPLE) return ((Number)value1).intValue() <= ((Number)value2).intValue();
+        if(instruction instanceof IF_ICMPLT) return ((Number)value1).intValue() < ((Number)value2).intValue();
+        if(instruction instanceof IF_ICMPNE) return ((Number)value1).intValue() != ((Number)value2).intValue();
+        throw new RuntimeException("Non-exhaustive if cases");
+    }
+
     public static Object computeBinaryResult(Number value1, Number value2, ArithmeticInstruction instruction, ConstantPoolGen cpgen){
         Type resultType = instruction.getType(cpgen);
         if(resultType.equals(Type.INT)){
