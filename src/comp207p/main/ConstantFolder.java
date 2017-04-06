@@ -34,31 +34,35 @@ public class ConstantFolder
     }
 
     public void simpleFolding(InstructionFinder instructionFinder, InstructionList il){
-        Iterator e = instructionFinder.search("(ConstantPushInstruction|LDC)(ConstantPushInstruction|LDC)(ArithmeticInstruction)");
+        Iterator e = instructionFinder.search("((ConstantPushInstruction|LDC|LDC2_W)(ConstantPushInstruction|LDC|LDC2_W)(ArithmeticInstruction))");
         while(e.hasNext()){
             InstructionHandle[] match = (InstructionHandle[]) e.next();
+            InstructionHandle value1, value2, op;
             Type instType1, instType2;
-            instType1 = Utils.getPushType(match[0].getInstruction(), cpgen);
-            instType2 = Utils.getPushType(match[1].getInstruction(), cpgen);
+            value1 = match[0];
+            value2 = match[1];
+            op = match[2];
+            instType1 = Utils.getPushType(value1.getInstruction(), cpgen);
+            instType2 = Utils.getPushType(value2.getInstruction(), cpgen);
             if(! (Utils.isArithmeticType(instType1) && Utils.isArithmeticType(instType2))){
                 System.err.println("THAT'S REALLY WEIRD.");
                 continue;
             }
-            Object constant = Utils.computeBinaryResult(Utils.getPushValue(match[0].getInstruction(), cpgen),
-                    Utils.getPushValue(match[1].getInstruction(), cpgen),
-                    (ArithmeticInstruction) match[2].getInstruction(), cpgen);
+            Object constant = Utils.computeBinaryResult(Utils.getPushValue(value1.getInstruction(), cpgen),
+                    Utils.getPushValue(value2.getInstruction(), cpgen),
+                    (ArithmeticInstruction) op.getInstruction(), cpgen);
             try {
-                il.delete(match[0], match[1]);
+                il.delete(value1, value2);
             } catch(TargetLostException ex){
                 for (InstructionHandle target : ex.getTargets()) {
                     for (InstructionTargeter t : target.getTargeters()) {
-                        t.updateTarget(target, match[2]);
+                        t.updateTarget(target, op);
                     }
                 }
             }
-            match[2].setInstruction(instructionFactory.createConstant(constant));
+            op.setInstruction(instructionFactory.createConstant(constant));
         }
-        e = instructionFinder.search("(ConstantPushInstruction|LDC)(INEG|LNEG|FNEG|DNEG)");
+        e = instructionFinder.search("(ConstantPushInstruction|LDC|LDC2_W)(INEG|LNEG|FNEG|DNEG)");
         while(e.hasNext()){
             InstructionHandle[] match = (InstructionHandle[]) e.next();
             Type instType1;
@@ -81,6 +85,23 @@ public class ConstantFolder
             }
             match[1].setInstruction(instructionFactory.createConstant(constant));
         }
+        e = instructionFinder.search("(ConstantPushInstruction|LDC|LDC2_W)(ConversionInstruction)");
+        while(e.hasNext()){
+            InstructionHandle[] match = (InstructionHandle[]) e.next();
+            ConversionInstruction conversionInstruction = (ConversionInstruction) match[1].getInstruction();
+            Number toCast = Utils.getPushValue(match[0].getInstruction(), cpgen);
+            Object result = Utils.convertObject(conversionInstruction.getType(cpgen), toCast);
+            try {
+                il.delete(match[0]);
+            } catch(TargetLostException ex){
+                for (InstructionHandle target : ex.getTargets()) {
+                    for (InstructionTargeter t : target.getTargeters()) {
+                        t.updateTarget(target, match[1]);
+                    }
+                }
+            }
+            match[1].setInstruction(instructionFactory.createConstant(result));
+        }
     }
 
     private class ConstantVarInfo {
@@ -91,15 +112,12 @@ public class ConstantFolder
     }
 
     private ArrayList<ConstantVarInfo> lookForConstantVariables(InstructionFinder instructionFinder, InstructionList il, MethodGen m) {
-        Iterator e = instructionFinder.search("(ConstantPushInstruction|LDC)(StoreInstruction)");
+        Iterator e = instructionFinder.search("(ConstantPushInstruction|LDC|LDC2_W)(StoreInstruction)");
         ArrayList<ConstantVarInfo> constantVarInfos = new ArrayList<>();
         while (e.hasNext()) {
             InstructionHandle[] match = (InstructionHandle[]) e.next();
             ConstantVarInfo info = new ConstantVarInfo();
-            if (match[0].getInstruction() instanceof ConstantPushInstruction)
-                info.value = ((ConstantPushInstruction) match[0].getInstruction()).getValue();
-            else
-                info.value = ((LDC) match[0].getInstruction()).getValue(cpgen);
+            info.value = Utils.getPushValue(match[0].getInstruction(), cpgen);
             info.assignPosition = match[1].getPosition();
             info.index = ((StoreInstruction) match[1].getInstruction()).getIndex();
             info.lastValidPosition = il.getEnd().getPosition();
@@ -113,12 +131,78 @@ public class ConstantFolder
             }
         }
 
-        e = instructionFinder.search("StoreInstruction");
+        /*ArrayList<ConstantVarInfo> toAdd = new ArrayList<>();
+        do{
+            toAdd.clear();
+            for(ConstantVarInfo info : constantVarInfos) {
+                e = instructionFinder.search("IINC|StoreInstruction|BranchInstruction");
+                int minPos = il.getEnd().getPosition()+1;
+                InstructionHandle nearestInstruction = null;
+                while (e.hasNext()) {
+                    InstructionHandle[] match = (InstructionHandle[]) e.next();
+                    if(match[0].getInstruction() instanceof StoreInstruction){
+                        if( ((StoreInstruction)match[0].getInstruction()).getIndex() != info.index) continue;
+                    }
+                    if(match[0].getInstruction() instanceof IINC){
+                        if( ((IINC)match[0].getInstruction()).getIndex() != info.index) continue;
+                    }
+                    if (match[0].getPosition() > info.assignPosition && match[0].getPosition() < minPos){
+                        minPos = match[0].getPosition();
+                        nearestInstruction = match[0];
+                    }
+                }
+                if(nearestInstruction == null) continue;
+                if(info.lastValidPosition < nearestInstruction.getPosition()) continue;
+                info.lastValidPosition = nearestInstruction.getPosition();
+                if(nearestInstruction.getInstruction() instanceof BranchInstruction){
+                    BranchInstruction branchInstruction = ((BranchInstruction)nearestInstruction.getInstruction());
+                    if( branchInstruction.getTarget().getPosition() > nearestInstruction.getPosition() ){ //FORWARD JUMP
+                        ConstantVarInfo i = new ConstantVarInfo();
+                        i.assignPosition = branchInstruction.getTarget().getPosition();
+                        i.lastValidPosition = il.getEnd().getPosition();
+                        i.index = info.index;
+                        i.value = info.value;
+                        toAdd.add(i);
+                    }
+                    else{
+                        boolean modifiedVariable = false;
+                        Iterator e2 = instructionFinder.search("StoreInstruction|IINC");
+                        while(e2.hasNext()){
+                            InstructionHandle handle = ((InstructionHandle[])e2.next())[0];
+                            if(handle.getInstruction() instanceof StoreInstruction &&
+                                    ((StoreInstruction)handle.getInstruction()).getIndex() != info.index) continue;
+                            if(handle.getInstruction() instanceof IINC &&
+                                    ((IINC)handle.getInstruction()).getIndex() != info.index) continue;
+                            if(handle.getPosition() < branchInstruction.getTarget().getPosition()) continue;
+                            if(handle.getPosition() > nearestInstruction.getPosition()) continue;
+                            modifiedVariable = true;
+                            break;
+                        }
+                        if(!modifiedVariable){
+                            ConstantVarInfo i = new ConstantVarInfo();
+                            i.assignPosition = branchInstruction.getTarget().getPosition();
+                            i.lastValidPosition = nearestInstruction.getPosition();
+                            i.index = info.index;
+                            i.value = info.value;
+                            toAdd.add(i);
+                        }
+                    }
+                    if(nearestInstruction.getInstruction() instanceof IfInstruction){
+
+                    }
+                }
+            }
+            constantVarInfos.addAll(toAdd);
+        } while(!toAdd.isEmpty());*/
+
+        e = instructionFinder.search("StoreInstruction|IINC");
         while (e.hasNext()) {
             InstructionHandle[] match = (InstructionHandle[]) e.next();
-            StoreInstruction instruction = (StoreInstruction) match[0].getInstruction();
+            int index = -1;
+            if(match[0].getInstruction() instanceof StoreInstruction) index = ((StoreInstruction) match[0].getInstruction()).getIndex();
+            if(match[0].getInstruction() instanceof IINC) index = ((IINC) match[0].getInstruction()).getIndex();
             for(ConstantVarInfo i : constantVarInfos) {
-                if (i.index == instruction.getIndex() && i.lastValidPosition > match[0].getPosition() && match[0].getPosition() > i.assignPosition) {
+                if (i.index == index && i.lastValidPosition > match[0].getPosition() && match[0].getPosition() > i.assignPosition) {
                     i.lastValidPosition = match[0].getPosition();
                 }
             }
@@ -130,6 +214,7 @@ public class ConstantFolder
             InstructionHandle handle = match[0];
             BranchInstruction instruction = (BranchInstruction) handle.getInstruction();
             for(ConstantVarInfo info : constantVarInfos){
+                //if(info.assignPosition > match[0].getPosition()) continue;
                 if(info.lastValidPosition >= instruction.getTarget().getPosition()){
                     info.lastValidPosition = instruction.getTarget().getPosition()-1;
                 }
@@ -160,6 +245,28 @@ public class ConstantFolder
         }
     }
 
+    private void deleteAllStackHandles(InstructionHandle starter, InstructionList il){
+        InstructionHandle lastToDelete = starter;
+        InstructionHandle nextNode = starter.getNext();
+        int toDelete = 0;
+        do{
+            toDelete += lastToDelete.getInstruction().consumeStack(cpgen);
+            toDelete -= lastToDelete.getInstruction().produceStack(cpgen);
+            if(toDelete == 0) break;
+            lastToDelete = lastToDelete.getPrev();
+        } while(toDelete > 0);
+        try {
+            il.delete(lastToDelete, starter);
+        } catch(TargetLostException ex){
+            for (InstructionHandle target : ex.getTargets()) {
+                for (InstructionTargeter t : target.getTargeters()) {
+                    if(nextNode == null) throw new RuntimeException("Bad");
+                    t.updateTarget(target, nextNode);
+                }
+            }
+        }
+    }
+
     private void optimizeUnusedVariables(InstructionFinder instructionFinder, InstructionList il){
         HashSet<Integer> indices = new HashSet<Integer>();
         Iterator e = instructionFinder.search("StoreInstruction");
@@ -177,18 +284,7 @@ public class ConstantFolder
             while(e.hasNext()){
                 InstructionHandle[] match = (InstructionHandle[]) e.next();
                 if( ((StoreInstruction)match[0].getInstruction()).getIndex() == index){
-                    InstructionHandle nextNode = match[0].getNext();
-                    try {
-                        if(match[0].getPrev() == null) throw new RuntimeException("This should never happen");
-                        il.delete(match[0].getPrev(), match[0]);
-                    } catch(TargetLostException ex){
-                        for (InstructionHandle target : ex.getTargets()) {
-                            for (InstructionTargeter t : target.getTargeters()) {
-                                if(nextNode == null) throw new RuntimeException("Bad");
-                                t.updateTarget(target, nextNode);
-                            }
-                        }
-                    }
+                    deleteAllStackHandles(match[0], il);
                 }
             }
         }

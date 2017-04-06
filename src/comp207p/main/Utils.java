@@ -54,6 +54,9 @@ public class Utils {
         if(instruction instanceof LDC){
             return ((LDC)instruction).getType(cpgen);
         }
+        if(instruction instanceof LDC2_W){
+            return ((LDC2_W)instruction).getType(cpgen);
+        }
         if(instruction instanceof ConstantPushInstruction){
             return ((ConstantPushInstruction)instruction).getType(cpgen);
         }
@@ -61,8 +64,9 @@ public class Utils {
     }
 
     public static Number getPushValue(Instruction instruction, ConstantPoolGen cpgen){
-        if(instruction instanceof LDC){
-            Object value = ((LDC)instruction).getValue(cpgen);
+        if(instruction instanceof LDC || instruction instanceof LDC2_W){
+            Object value;
+            value = instruction instanceof LDC ? ((LDC)instruction).getValue(cpgen) : ((LDC2_W)instruction).getValue(cpgen);
             if(value instanceof Number)
                 return (Number)value;
             else
@@ -175,7 +179,7 @@ public class Utils {
         return null;
     }
 
-    /*private static Class TypeToJavaClass(Type t){
+    public static Class TypeToJavaClass(Type t){
         if(t.equals(Type.BYTE)) return Byte.class;
         if(t.equals(Type.FLOAT)) return Float.class;
         if(t.equals(Type.LONG)) return Long.class;
@@ -185,5 +189,34 @@ public class Utils {
         if(t.equals(Type.CLASS)) return Class.class;
         if(t.equals(Type.DOUBLE)) return Double.class;
         return null;
-    }*/
+    }
+
+    public static Object convertObject(Type resultType, Number toCast) {
+        Object result = null;
+        if (resultType == Type.BYTE) {
+            result = toCast.byteValue();
+        }
+        if (resultType == Type.BOOLEAN) {
+            result = toCast.intValue() == 0 ? 0 : 1;
+        }
+        if (resultType == Type.CHAR) {
+            result = (char) toCast.byteValue();
+        }
+        if (resultType == Type.DOUBLE) {
+            result = toCast.doubleValue();
+        }
+        if (resultType == Type.FLOAT) {
+            result = toCast.floatValue();
+        }
+        if (resultType == Type.INT) {
+            result = toCast.intValue();
+        }
+        if (resultType == Type.LONG) {
+            result = toCast.longValue();
+        }
+        if (resultType == Type.SHORT) {
+            result = toCast.shortValue();
+        }
+        return result;
+    }
 }
