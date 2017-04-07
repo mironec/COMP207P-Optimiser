@@ -284,6 +284,45 @@ public class ConstantFolder
         public int index;
         public int assignPosition;
         public int lastValidPosition;
+        public boolean finalisedValidPos = false;
+    }
+
+    private int constantVarInfosAdd(ArrayList<ConstantVarInfo> constantVarInfos, ConstantVarInfo toAdd){
+        ArrayList<ConstantVarInfo> toDeleteList = new ArrayList<>();
+        boolean canBeAdded = true;
+        for(ConstantVarInfo i : constantVarInfos){
+            if(i.index != toAdd.index) continue;
+            if(toAdd.assignPosition == i.assignPosition && i.lastValidPosition >= toAdd.assignPosition){
+                if(toAdd.value == i.value){ //Combine
+                    //i.lastValidPosition = Math.max(toAdd.lastValidPosition, i.lastValidPosition);
+                    return 0;
+                }
+                else if(i.finalisedValidPos){ //Conflict
+                    toDeleteList.add(i);
+                    canBeAdded = false;
+                }
+            }
+            else if(i.assignPosition == toAdd.assignPosition && toAdd.lastValidPosition >= i.assignPosition){
+                if(toAdd.value == i.value){ //Combine
+                    if(i.assignPosition > toAdd.assignPosition) {
+                        i.assignPosition = toAdd.assignPosition;
+                        return 1;
+                    }
+                    return 0;
+                }
+                else if(i.finalisedValidPos){ //Conflict
+                    toDeleteList.add(i);
+                    canBeAdded = false;
+                }
+            }
+        }
+        constantVarInfos.removeAll(toDeleteList);
+        if(!toDeleteList.isEmpty()) return 1;
+        if(canBeAdded){
+            constantVarInfos.add(toAdd);
+            return 1;
+        }
+        return 0;
     }
 
     private ArrayList<ConstantVarInfo> lookForConstantVariables(InstructionFinder instructionFinder, InstructionList il, MethodGen m) {
@@ -296,16 +335,9 @@ public class ConstantFolder
             info.value = Utils.getPushValue(match[0].getInstruction(), cpgen);
             info.assignPosition = match[1].getPosition();
             info.index = ((StoreInstruction) match[1].getInstruction()).getIndex();
-            info.lastValidPosition = il.getEnd().getPosition();
+            info.lastValidPosition = il.getEnd().getPosition(); info.finalisedValidPos = false;
             constantVarInfos.add(info);
         }
-        /*for(ConstantVarInfo i : constantVarInfos) {
-            for (ConstantVarInfo i2 : constantVarInfos) {
-                if (i2.index == i.index && i2.lastValidPosition > i.assignPosition && i.assignPosition > i2.assignPosition) {
-                    i2.lastValidPosition = i.assignPosition;
-                }
-            }
-        }*/
 
         /*ArrayList<ConstantVarInfo> toAdd = new ArrayList<>();
         do{
@@ -329,46 +361,30 @@ public class ConstantFolder
                 }
                 if(nearestInstruction == null) continue;
                 if(info.lastValidPosition < nearestInstruction.getPosition()) continue;
-                info.lastValidPosition = nearestInstruction.getPosition();
+                info.lastValidPosition = nearestInstruction.getPosition(); info.finalisedValidPos = true;
                 if(nearestInstruction.getInstruction() instanceof BranchInstruction){
                     BranchInstruction branchInstruction = ((BranchInstruction)nearestInstruction.getInstruction());
-                    if( branchInstruction.getTarget().getPosition() > nearestInstruction.getPosition() ){ //FORWARD JUMP
-                        ConstantVarInfo i = new ConstantVarInfo();
-                        i.assignPosition = branchInstruction.getTarget().getPosition();
-                        i.lastValidPosition = il.getEnd().getPosition();
-                        i.index = info.index;
-                        i.value = info.value;
-                        toAdd.add(i);
-                    }
-                    else{
-                        boolean modifiedVariable = false;
-                        Iterator e2 = instructionFinder.search("StoreInstruction|IINC");
-                        while(e2.hasNext()){
-                            InstructionHandle handle = ((InstructionHandle[])e2.next())[0];
-                            if(handle.getInstruction() instanceof StoreInstruction &&
-                                    ((StoreInstruction)handle.getInstruction()).getIndex() != info.index) continue;
-                            if(handle.getInstruction() instanceof IINC &&
-                                    ((IINC)handle.getInstruction()).getIndex() != info.index) continue;
-                            if(handle.getPosition() < branchInstruction.getTarget().getPosition()) continue;
-                            if(handle.getPosition() > nearestInstruction.getPosition()) continue;
-                            modifiedVariable = true;
-                            break;
-                        }
-                        if(!modifiedVariable){
-                            ConstantVarInfo i = new ConstantVarInfo();
-                            i.assignPosition = branchInstruction.getTarget().getPosition();
-                            i.lastValidPosition = nearestInstruction.getPosition();
-                            i.index = info.index;
-                            i.value = info.value;
-                            toAdd.add(i);
-                        }
-                    }
-                    if(nearestInstruction.getInstruction() instanceof IfInstruction){
-
+                    ConstantVarInfo i = new ConstantVarInfo();
+                    i.assignPosition = branchInstruction.getTarget().getPosition();
+                    i.lastValidPosition = il.getEnd().getPosition(); i.finalisedValidPos = false;
+                    i.index = info.index;
+                    i.value = info.value;
+                    toAdd.add(i);
+                    if(nearestInstruction.getInstruction() instanceof IfInstruction && nearestInstruction.getNext() != null){
+                        ConstantVarInfo i2 = new ConstantVarInfo();
+                        i2.assignPosition = nearestInstruction.getNext().getPosition();
+                        i2.lastValidPosition = il.getEnd().getPosition(); i.finalisedValidPos = false;
+                        i2.index = info.index;
+                        i2.value = info.value;
+                        toAdd.add(i2);
                     }
                 }
             }
-            constantVarInfos.addAll(toAdd);
+            int numAdded = 0;
+            for(ConstantVarInfo i : toAdd) {
+                numAdded += constantVarInfosAdd(constantVarInfos, i);
+            }
+            if(numAdded == 0) toAdd.clear();
         } while(!toAdd.isEmpty());*/
 
         e = instructionFinder.search(Utils.bigStore+"|IINC");
@@ -390,8 +406,26 @@ public class ConstantFolder
             InstructionHandle handle = match[0];
             BranchInstruction instruction = (BranchInstruction) handle.getInstruction();
             for(ConstantVarInfo info : constantVarInfos){
-                //if(info.assignPosition > match[0].getPosition()) continue;
+                if(info.assignPosition > instruction.getTarget().getPosition()) continue;
                 if(info.lastValidPosition >= instruction.getTarget().getPosition()){
+                    Iterator e2 = instructionFinder.search(Utils.bigStore+"|IINC|BranchInstruction", instruction.getTarget());
+                    boolean modifiedVariable = false;
+                    while(e2.hasNext()){
+                        InstructionHandle[] match2 = (InstructionHandle[]) e2.next();
+                        int index = -1;
+                        if(match2[0].getInstruction() instanceof StoreInstruction) index = ((StoreInstruction) match2[0].getInstruction()).getIndex();
+                        if(match2[0].getInstruction() instanceof IINC) index = ((IINC) match2[0].getInstruction()).getIndex();
+                        if(match2[0].getInstruction() instanceof BranchInstruction) {
+                            if(((BranchInstruction)match2[0].getInstruction()).getTarget().getPosition() >= instruction.getTarget().getPosition()) continue;
+                            else modifiedVariable = true;
+                        }
+                        if(index != info.index) continue;
+                        if(instruction.getTarget().getPosition() < match[0].getPosition()) { //Back jump
+                            if (match2[0].getPosition() > match[0].getPosition()) continue;
+                        }
+                        modifiedVariable = true;
+                    }
+                    if(!modifiedVariable) continue;
                     info.lastValidPosition = instruction.getTarget().getPosition()-1;
                 }
             }
@@ -444,24 +478,28 @@ public class ConstantFolder
     }
 
     private void optimizeUnusedVariables(InstructionFinder instructionFinder, InstructionList il){
-        HashSet<Integer> indices = new HashSet<Integer>();
         Iterator e = instructionFinder.search(Utils.bigStore);
         while(e.hasNext()){
             InstructionHandle[] match = (InstructionHandle[]) e.next();
-            indices.add(((StoreInstruction)match[0].getInstruction()).getIndex());
-        }
-        e = instructionFinder.search(Utils.bigLoad);
-        while(e.hasNext()){
-            InstructionHandle[] match = (InstructionHandle[]) e.next();
-            indices.remove(((LoadInstruction)match[0].getInstruction()).getIndex());
-        }
-        for(int index : indices) {
-            e = instructionFinder.search(Utils.bigStore);
-            while(e.hasNext()){
-                InstructionHandle[] match = (InstructionHandle[]) e.next();
-                if( ((StoreInstruction)match[0].getInstruction()).getIndex() == index){
-                    deleteAllStackHandles(match[0], il);
+            StoreInstruction storeInstruction = (StoreInstruction) match[0].getInstruction();
+            Iterator e2 = instructionFinder.search(Utils.bigLoad + "|BranchInstruction", match[0]);
+            boolean isUselessStore = true;
+            while(e2.hasNext()){
+                InstructionHandle[] match2 = (InstructionHandle[]) e2.next();
+                if(match2[0].getInstruction() instanceof LoadInstruction){
+                    if(((LoadInstruction)match2[0].getInstruction()).getIndex() == storeInstruction.getIndex()){
+                        isUselessStore = false;
+                        break;
+                    }
                 }
+                if(match2[0].getInstruction() instanceof BranchInstruction){
+                    if(((BranchInstruction)match2[0].getInstruction()).getTarget().getPosition() > match[0].getPosition()) continue;
+                    isUselessStore = false; //This could be improved
+                    break;
+                }
+            }
+            if(isUselessStore){
+                deleteAllStackHandles(match[0], il);
             }
         }
     }
@@ -488,11 +526,16 @@ public class ConstantFolder
         System.out.println(gen.getClassName());
 
 		Method[] methods = gen.getMethods();
+		Optimization removeDeadCode = new Optimization() {
+            @Override
+            void run(InstructionFinder instructionFinder, InstructionList il, MethodGen methodGen) {
+                removeDeadCode(instructionFinder, il);
+            }
+        };
 		Optimization simpleFolding = new Optimization() {
             @Override
             void run(InstructionFinder instructionFinder, InstructionList il, MethodGen methodGen) {
                 simpleFolding(instructionFinder, il);
-                removeDeadCode(instructionFinder, il);
             }
         };
         Optimization constantFolding = new Optimization() {
@@ -514,6 +557,7 @@ public class ConstantFolder
                 runUntilExhaustion(constantFolding, il, methodGen);
                 runUntilExhaustion(removeUnusedVariables, il, methodGen);
                 runUntilExhaustion(simpleFolding, il, methodGen);
+                runUntilExhaustion(removeDeadCode, il, methodGen);
             }
         };
 
